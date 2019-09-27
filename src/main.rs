@@ -2,7 +2,7 @@ extern crate clap;
 extern crate reqwest;
 use std::io::Error;
 use std::io;
-use std::io::Read;
+use serde::{Deserialize};
 use clap::{App, SubCommand};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,24 +20,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Running magic_drafter, start a draft run in arena.");
         let mut input = String::new();
-        match io::stdin().read_line(&mut input) {
-            Ok(_) => {
-                println!("{}", input);
-            }
-            Err(error) => println!("error: {}", error)
-        }
+        io::stdin().read_line(&mut input)?;
     }
 
     Ok(())
 }
 
+#[derive(Debug)]
+#[derive(Deserialize)]
+struct Card {
+    id: String,
+    name: String,
+    arena_id: u32,
+    set_name: String,
+}
+
 fn pull() -> Result<(), Error> {
     println!("Pulling latest card details...");
-    let mut res = reqwest::get("https://api.scryfall.com/cards/arena/67330").unwrap();
-    let mut body = String::new();
-    res.read_to_string(&mut body)?;
+    let res: Card = reqwest::get("https://api.scryfall.com/cards/arena/67330").unwrap().json().unwrap();
 
-    println!("{}", body);
+    println!("{:?}", res);
     println!("done.");
     Ok(())
 }
