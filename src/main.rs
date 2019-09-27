@@ -4,12 +4,12 @@ extern crate regex;
 use std::io::Error;
 use std::io;
 use std::{thread, time};
+use std::collections::HashSet;
 use serde::{Deserialize};
 use clap::{App, SubCommand};
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, NO_PARAMS};
 use regex::Regex;
-// use time::Timespec;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = 
@@ -80,29 +80,39 @@ fn init_db() -> rusqlite::Result<()> {
         )",
         NO_PARAMS)?;
 
-    fetch_card_defs(conn).unwrap();
+    let cards = get_cards().unwrap();
+    let mut stmt = conn.prepare("SELECT id FROM card")?;
+    let existing_cards: HashSet<_> = stmt
+        .query_map::<u32, _, _>(NO_PARAMS, |row| row.get(0))?
+        .map(|x| x.unwrap())
+        .collect();
+
+    insert_card_defs(&conn, cards.difference(&existing_cards).cloned().collect()).unwrap();
+    println!("done.");
     Ok(())
 }
 
-// This should return a vector of cards but am sneaking in a db update while we wait to make next request
-fn fetch_card_defs(conn: Connection) -> Result<(), Error> {
+fn get_cards() -> Result<HashSet<u32>, Error> {
     let res = reqwest::get("https://raw.githubusercontent.com/mtgatracker/node-mtga/master/mtga/m20.js").unwrap().text().unwrap();
 
-    println!("{}", res);
-
     let re = Regex::new(r"mtgaID: (\d+), ").unwrap();
-    let records = re.captures_iter(&res).map(|x| x[1].parse::<u32>().unwrap());
-    for record in records {
-        let card = pull(record).unwrap();
+    let records: HashSet<u32> = re.captures_iter(&res).map(|x| x[1].parse::<u32>().unwrap()).collect();
+    
+    Ok(records)
+}
+
+// This should return a vector of cards but am sneaking in a db update while we wait to make next request
+fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>) -> Result<(), Error> {
+    for id in card_ids {
+        let card = pull(id).unwrap();
         conn.execute(
             "INSERT INTO card (id, name, scryfallId, cardSet)
              VALUES (?1, ?2, ?3, ?4)",
             &[&card.arena_id as &ToSql, &card.name, &card.id, &card.set_name],
         ).unwrap();
         println!("{:?}", card);
-        thread::sleep(time::Duration::from_secs(1));
+        thread::sleep(time::Duration::from_secs(1)); // be a good citizen
     }
 
-    println!("done.");
     Ok(())
 }
