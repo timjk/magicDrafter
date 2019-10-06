@@ -11,6 +11,7 @@ clap = "~2.33"
 reqwest = "~0.9"
 serde = "~1.0"
 regex = "1"
+fuzzy-matcher = "*"
 
 [dependencies.rusqlite]
 version = "0.20.0"

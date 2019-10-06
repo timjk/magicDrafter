@@ -3,13 +3,17 @@ extern crate reqwest;
 extern crate regex;
 use std::io::Error;
 use std::io;
+use std::str;
 use std::{thread, time};
 use std::collections::HashSet;
+use std::collections::HashMap;
+use std::cmp::max;
 use serde::{Deserialize};
 use clap::{App, SubCommand};
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, NO_PARAMS};
 use regex::Regex;
+use fuzzy_matcher::skim::{fuzzy_match};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = 
@@ -24,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_matches();
 
     if let Some(_matches) = matches.subcommand_matches("pull") {
-        pull(67330)?;
+        get_ranks()?;
         return Ok(())
     }
 
@@ -36,13 +40,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Running magic_drafter, start a draft run in arena.");
     let conn = Connection::open("test.db")?;
     let mut stmt = conn
-        .prepare("SELECT id, name, scryfallId, cardSet FROM card")?;
+        .prepare("SELECT id, name, scryfallId, cardSet, cardRank FROM card")?;
     let card_iter = stmt
-        .query_map(NO_PARAMS, |row| Ok(ScryfallCard {
+        .query_map(NO_PARAMS, |row| Ok(Card {
             id: row.get(2)?,
             name: row.get(1)?,
             arena_id: row.get(0)?,
             set_name: row.get(3)?,
+            card_rank: row.get(4)?
         }))?;
     for card in card_iter {
         println!("{:?}", card.unwrap());
@@ -51,6 +56,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_line(&mut input)?;
 
     Ok(())
+}
+
+#[derive(Debug)]
+#[derive(Deserialize)]
+struct Card {
+    id: String,
+    name: String,
+    arena_id: u32,
+    set_name: String,
+    card_rank: String
 }
 
 #[derive(Debug)]
@@ -76,7 +91,8 @@ fn init_db() -> rusqlite::Result<()> {
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             scryfallId TEXT NOT NULL,
-            cardSet TEXT NOT NULL
+            cardSet TEXT NOT NULL,
+            cardRank TEXT NOT NULL
         )",
         NO_PARAMS)?;
 
@@ -87,7 +103,9 @@ fn init_db() -> rusqlite::Result<()> {
         .map(|x| x.unwrap())
         .collect();
 
-    insert_card_defs(&conn, cards.difference(&existing_cards).cloned().collect()).unwrap();
+    let ranks = get_ranks().unwrap();
+
+    insert_card_defs(&conn, cards.difference(&existing_cards).cloned().collect(), &ranks).unwrap();
     println!("done.");
     Ok(())
 }
@@ -101,18 +119,48 @@ fn get_cards() -> Result<HashSet<u32>, Error> {
     Ok(records)
 }
 
+fn get_ranks() -> Result<HashMap<String, String>, Error> {
+    let res = reqwest::get("https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=0&sheet=Staging%20Sheet&tq=select+A,D")
+        .unwrap().text().unwrap();
+
+    let re = Regex::new(r#"c[^v]+v.{3}([^"]+)".{8}([^"]+)"#).unwrap();
+
+    let card_ranks: HashMap<String, String> = re.captures_iter(&res)
+        .map(|x| (x[1].to_owned(), x[2].to_owned()))
+        .collect();
+    
+    Ok(card_ranks)
+}
+
 // This should return a vector of cards but am sneaking in a db update while we wait to make next request
-fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>) -> Result<(), Error> {
+fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &HashMap<String, String>) -> Result<(), Error> {
     for id in card_ids {
         let card = pull(id).unwrap();
+        let card_rank = get_closest_match(&card.name, card_ranks);
         conn.execute(
-            "INSERT INTO card (id, name, scryfallId, cardSet)
-             VALUES (?1, ?2, ?3, ?4)",
-            &[&card.arena_id as &ToSql, &card.name, &card.id, &card.set_name],
+            "INSERT INTO card (id, name, scryfallId, cardSet, cardRank)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            &[&card.arena_id as &ToSql, &card.name, &card.id, &card.set_name, &card_rank],
         ).unwrap();
-        println!("{:?}", card);
+        println!("{:?}{:?}", card, card_rank);
         thread::sleep(time::Duration::from_secs(1)); // be a good citizen
     }
 
     Ok(())
 }
+
+fn get_closest_match<'a>(card_name: &str, card_ranks: &'a HashMap<String, String>) -> &'a str {
+    let result = card_ranks.into_iter().fold((0, ""), |acc, x| score_card_name(acc, x, card_name));
+    result.1
+}
+
+// TODO: how do we have anonymous methods with assignment
+fn score_card_name<'a>(acc: (i64, &'a str), x: (&String, &'a String), card_name: &str) -> (i64, &'a str) {
+    let max = max(acc.0, match fuzzy_match(&card_name, x.0) { Some(y) => y, None => 0 } );
+    if max > acc.0 { (max, x.1) } else { acc }
+}
+
+
+// Community set reviews https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=2&range=A1%3AZ&sheet=Table%20Source&tqx=reqId%3A1;responseHandler%3A__JsonpRequest_cb__.getResponse1_
+// card-name & rating https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=0&sheet=Staging%20Sheet&tq=select+A,D 
+// https://www.mtgcommunityreview.com/core-set-2020
