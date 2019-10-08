@@ -1,7 +1,7 @@
 extern crate clap;
 extern crate reqwest;
 extern crate regex;
-use std::io::Error;
+use std::error::Error;
 use std::io;
 use std::str;
 use std::{thread, time};
@@ -15,7 +15,7 @@ use rusqlite::{Connection, NO_PARAMS};
 use regex::Regex;
 use fuzzy_matcher::skim::{fuzzy_match};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = 
     App::new("magic_drafter")
         .version("v0.1")
@@ -41,6 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(())
     }
 
+
+    run()
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
     println!("Running magic_drafter, start a draft run in arena.");
     let conn = Connection::open("test.db")?;
     let mut stmt = conn
@@ -54,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             card_rank: row.get(4)?
         }))?;
     for card in card_iter {
-        println!("{:?}", card.unwrap());
+        println!("{:?}", card?);
     }
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
@@ -85,7 +90,7 @@ fn fetch_card_details(id: u32) -> Result<ScryfallCard, reqwest::Error> {
     reqwest::get(&format!("https://api.scryfall.com/cards/arena/{}", id))?.json()
 }
 
-fn init_db() -> rusqlite::Result<()> {
+fn init_db() -> Result<(), Box<dyn Error>> {
     println!("Initialising collection...");
 
     let conn = Connection::open("test.db")?;
@@ -99,44 +104,41 @@ fn init_db() -> rusqlite::Result<()> {
         )",
         NO_PARAMS)?;
 
-    let cards = fetch_arena_cards().unwrap();
     let mut stmt = conn.prepare("SELECT id FROM card")?;
     let existing_cards: HashSet<_> = stmt
         .query_map::<u32, _, _>(NO_PARAMS, |row| row.get(0))?
-        .map(|x| x.unwrap())
+        .map(|x| x.unwrap()) // This doesn't feel idiomatic
         .collect();
 
-    let ranks = fetch_card_ranks().unwrap();
-
-    insert_card_defs(&conn, cards.difference(&existing_cards).cloned().collect(), &ranks).unwrap();
+    let ranks = fetch_card_ranks()?;
+    let cards = fetch_arena_cards()?;
+    insert_card_defs(&conn, cards.difference(&existing_cards).cloned().collect(), &ranks)?;
     println!("done.");
     Ok(())
 }
 
-fn fetch_arena_cards() -> Result<HashSet<u32>, Error> {
-    let res = reqwest::get("https://raw.githubusercontent.com/mtgatracker/node-mtga/master/mtga/m20.js").unwrap().text().unwrap();
+fn fetch_arena_cards() -> Result<HashSet<u32>, Box<dyn Error>> {
+    let res = reqwest::get("https://raw.githubusercontent.com/mtgatracker/node-mtga/master/mtga/m20.js")?.text()?;
 
-    let re = Regex::new(r"mtgaID: (\d+), ").unwrap();
+    let re = Regex::new(r"mtgaID: (\d+), ")?;
     let records: HashSet<u32> = re.captures_iter(&res).map(|x| x[1].parse::<u32>().unwrap()).collect();
     
     Ok(records)
 }
 
-fn fetch_card_ranks() -> Result<HashMap<String, String>, Error> {
-    let res = reqwest::get("https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=0&sheet=Staging%20Sheet&tq=select+A,D")
-        .unwrap().text().unwrap();
+fn fetch_card_ranks() -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let res = reqwest::get("https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=0&sheet=Staging%20Sheet&tq=select+A,D")?.text()?;
 
-    let re = Regex::new(r#"c[^v]+v.{3}([^"]+)".{8}([^"]+)"#).unwrap();
-
-    let card_ranks: HashMap<String, String> = re.captures_iter(&res)
+    let re = Regex::new(r#"c[^v]+v.{3}([^"]+)".{8}([^"]+)"#)?;
+    let card_ranks = re.captures_iter(&res)
         .map(|x| (str::replace(&x[1].to_owned(), "\\u0027", "'"), x[2].to_owned()))
-        .collect();
+        .collect::<HashMap<String, String>>(); // turbo-fish syntax
 
-    Ok(card_ranks)
+    Ok(card_ranks) // Is there a way to automatically return Result without needing Ok(item)?
 }
 
 // This should return a vector of cards but haven't figured a way to do multi-insert with rusqlite
-fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &HashMap<String, String>) -> Result<(), Error> {
+fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &HashMap<String, String>) -> Result<(), Box<dyn Error>> {
     for id in card_ids {
         let card = match fetch_card_details(id) {
             Ok(x) => x,
