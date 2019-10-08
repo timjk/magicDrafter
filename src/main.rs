@@ -159,12 +159,9 @@ fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &Hash
 }
 
 fn get_closest_match<'a>(card_name: &str, card_ranks: &'a HashMap<String, String>) -> &'a str {
-    let result = card_ranks.into_iter().fold((0, ""), |acc, x| score_card_name(acc, x, card_name));
+    let result = card_ranks.into_iter().fold((0, ""), |acc, x| {
+        let max = max(acc.0, match fuzzy_match(&card_name, x.0) { Some(y) => y, None => 0 } );
+        if max > acc.0 { (max, x.1) } else { acc }
+    });
     result.1
-}
-
-// TODO: how do we have anonymous methods with assignment
-fn score_card_name<'a>(acc: (i64, &'a str), x: (&String, &'a String), card_name: &str) -> (i64, &'a str) {
-    let max = max(acc.0, match fuzzy_match(&card_name, x.0) { Some(y) => y, None => 0 } );
-    if max > acc.0 { (max, x.1) } else { acc }
 }
