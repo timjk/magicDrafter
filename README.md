@@ -13,6 +13,8 @@ Created primarily to learn Rust as such expect a lot of churn in the codebase as
 - Display a UI in vulkan overtop of `MagicArena`
 
 ## Rust concepts to learn
+- Testing
+- Project layout
 - Handle multiple errors types in a single function
 - Investigate `async/await`
 
