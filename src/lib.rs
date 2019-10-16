@@ -9,31 +9,61 @@ use rusqlite::types::ToSql;
 use rusqlite::{Connection, NO_PARAMS};
 use regex::Regex;
 use fuzzy_matcher::skim::{fuzzy_match};
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::fs::File;
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     println!("Running magic_drafter, start a draft run in arena.");
-    let conn = Connection::open("test.db")?;
-    let mut stmt = conn
-        .prepare("SELECT id, name, scryfallId, cardSet, cardRank FROM card")?;
-    let card_iter = stmt
-        .query_map(NO_PARAMS, |row| Ok(Card {
-            id: row.get(2)?,
-            name: row.get(1)?,
-            arena_id: row.get(0)?,
-            set_name: row.get(3)?,
-            card_rank: row.get(4)?
-        }))?;
-    for card in card_iter {
-        println!("{:?}", card?);
+    // let conn = Connection::open("test.db")?;
+    // let mut stmt = conn
+    //     .prepare("SELECT id, name, scryfallId, cardSet, cardRank FROM card")?;
+    // let card_iter = stmt
+    //     .query_map(NO_PARAMS, |row| Ok(Card {
+    //         id: row.get(2)?,
+    //         name: row.get(1)?,
+    //         arena_id: row.get(0)?,
+    //         set_name: row.get(3)?,
+    //         card_rank: row.get(4)?
+    //     }))?;
+    // for card in card_iter {
+    //     println!("{:?}", card?);
+    // }
+    let f = File::open("C:\\Users\\tim.jackson-kiely\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\output_log.txt")?;
+    let mut reader = BufReader::new(f);
+    // for line in reader.lines() {
+    //     println!("{}", line?);
+    // }
+
+    // let mut line = String::new();
+    // let len = reader.read_line(&mut line)?;
+    // println!("First line is {} bytes long", len);
+
+    // let mut input = String::new();
+    // io::stdin().read_line(&mut input)?;
+
+    loop {
+        let mut line = String::new();
+        let resp = reader.read_line(&mut line);
+        match resp {
+            Ok(len) => {
+                if len > 0 {
+                    println!("{}", line);
+                } else {
+                    // println!("nothing");
+                }
+            },
+            Err(_) => {
+                println!("error");
+            }
+        }
+        thread::sleep(time::Duration::from_millis(5));
     }
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
 
     Ok(())
 }
 
-#[derive(Debug)]
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Card {
     id: String,
     name: String,
@@ -42,17 +72,12 @@ struct Card {
     card_rank: String
 }
 
-#[derive(Debug)]
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ScryfallCard {
     id: String,
     name: String,
     arena_id: u32,
     set_name: String,
-}
-
-fn fetch_card_details(id: u32) -> Result<ScryfallCard, reqwest::Error> {
-    reqwest::get(&format!("https://api.scryfall.com/cards/arena/{}", id))?.json()
 }
 
 pub fn init_db() -> Result<(), Box<dyn Error>> {
@@ -82,6 +107,17 @@ pub fn init_db() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+pub fn pull_latest_card_definitions() -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let res = reqwest::get("https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=0&sheet=Staging%20Sheet&tq=select+A,D")?.text()?;
+
+    let re = Regex::new(r#"c[^v]+v.{3}([^"]+)".{8}([^"]+)"#)?;
+    let card_ranks = re.captures_iter(&res)
+        .map(|x| (str::replace(&x[1].to_owned(), "\\u0027", "'"), x[2].to_owned()))
+        .collect::<HashMap<String, String>>(); // turbo-fish syntax >::() - very fishy
+
+    Ok(card_ranks) // Is there a way to automatically return Result without needing Ok(item)?
+}
+
 fn fetch_arena_cards() -> Result<HashSet<u32>, Box<dyn Error>> {
     let res = reqwest::get("https://raw.githubusercontent.com/mtgatracker/node-mtga/master/mtga/m20.js")?.text()?;
 
@@ -91,15 +127,8 @@ fn fetch_arena_cards() -> Result<HashSet<u32>, Box<dyn Error>> {
     Ok(records)
 }
 
-pub fn pull_latest_card_definitions() -> Result<HashMap<String, String>, Box<dyn Error>> {
-    let res = reqwest::get("https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=0&sheet=Staging%20Sheet&tq=select+A,D")?.text()?;
-
-    let re = Regex::new(r#"c[^v]+v.{3}([^"]+)".{8}([^"]+)"#)?;
-    let card_ranks = re.captures_iter(&res)
-        .map(|x| (str::replace(&x[1].to_owned(), "\\u0027", "'"), x[2].to_owned()))
-        .collect::<HashMap<String, String>>(); // turbo-fish syntax
-
-    Ok(card_ranks) // Is there a way to automatically return Result without needing Ok(item)?
+fn fetch_card_details(id: u32) -> Result<ScryfallCard, reqwest::Error> {
+    reqwest::get(&format!("https://api.scryfall.com/cards/arena/{}", id))?.json()
 }
 
 // This should return a vector of cards but haven't figured a way to do multi-insert with rusqlite
@@ -112,7 +141,7 @@ fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &Hash
                 continue;
             }
         };
-        let card_rank = get_closest_match(&card.name, card_ranks);
+        let card_rank = get_closest_match(&card.name, &card_ranks);
         conn.execute(
             "INSERT INTO card (id, name, scryfallId, cardSet, cardRank)
              VALUES (?1, ?2, ?3, ?4, ?5)",
