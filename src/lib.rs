@@ -21,22 +21,14 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     loop {
         let mut line = String::new();
-        let resp = reader.read_to_string(&mut line);
-        match resp {
-            Ok(len) => {
-                if len > 0 {
-                    if let Some(ref m) = re.captures_iter(&line).last() {
-                        let pick: DraftPick = serde_json::from_str(&m[1]).unwrap();
-                        println!("{:?}", pick.draftPack)
-                    }
-                } else {
-                    println!("waiting...");
-                    thread::sleep(time::Duration::from_millis(5000));
-                }
-            }
-            Err(_) => {
-                println!("error");
-            }
+        if reader.read_to_string(&mut line)? > 0 {
+           if let Some(ref m) = re.captures_iter(&line).last() {
+                let pick: DraftPick = serde_json::from_str(&m[1]).unwrap();
+                println!("{:?}", pick.draftPack)
+           }
+        } else {
+            println!("waiting...");
+            thread::sleep(time::Duration::from_millis(5000));
         }
     }
 
