@@ -4,7 +4,7 @@ use fuzzy_matcher::skim::fuzzy_match;
 use regex::Regex;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, NO_PARAMS};
-use serde::Deserialize;
+use serde::{Deserialize};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -15,32 +15,9 @@ use std::{io, thread, time};
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     println!("Running magic_drafter, start a draft run in arena.");
-    // let conn = Connection::open("test.db")?;
-    // let mut stmt = conn
-    //     .prepare("SELECT id, name, scryfallId, cardSet, cardRank FROM card")?;
-    // let card_iter = stmt
-    //     .query_map(NO_PARAMS, |row| Ok(Card {
-    //         id: row.get(2)?,
-    //         name: row.get(1)?,
-    //         arena_id: row.get(0)?,
-    //         set_name: row.get(3)?,
-    //         card_rank: row.get(4)?
-    //     }))?;
-    // for card in card_iter {
-    //     println!("{:?}", card?);
-    // }
     let f = File::open("output_log.txt")?;
-    // let f = File::open("C:\\Users\\tim.jackson-kiely\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\output_log.txt")?;
     let mut reader = BufReader::new(f);
-    // for line in reader.lines() {
-    //     println!("{}", line?);
-    // }
-    let re = Regex::new(r"<== Draft.*({.*})")?;
-
-
-    // let mut line = String::new();
-    // let len = reader.read_line(&mut line)?;
-    // println!("First line is {} bytes long", len);
+    let re = Regex::new(r"<== Draft\.MakePick(?s).*?(\{.*?\})")?;
 
     loop {
         let mut line = String::new();
@@ -49,7 +26,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             Ok(len) => {
                 if len > 0 {
                     if let Some(ref m) = re.captures_iter(&line).last() {
-                        println!("{}", &m[0]);
+                        let pick: DraftPick = serde_json::from_str(&m[1]).unwrap();
+                        println!("{:?}", pick.draftPack)
                     }
                 } else {
                     println!("waiting...");
@@ -72,6 +50,19 @@ struct Card {
     arena_id: u32,
     set_name: String,
     card_rank: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct DraftPick {
+    // playerId: String,
+    // eventName: String,
+    // draftId: String,
+    // draftStatus: String,
+    // packNumber: u32,
+    // pickNumber: u32,
+    draftPack: Vec<String>,
+    pickedCards: Vec<String>,
+    // requestUnits: f32
 }
 
 #[derive(Deserialize, Debug)]
