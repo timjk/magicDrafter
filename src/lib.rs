@@ -1,17 +1,17 @@
-extern crate reqwest;
 extern crate regex;
-use std::error::Error;
-use std::{io, thread, time};
-use std::collections::{HashSet, HashMap};
-use std::cmp::max;
-use serde::{Deserialize};
+extern crate reqwest;
+use fuzzy_matcher::skim::fuzzy_match;
+use regex::Regex;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, NO_PARAMS};
-use regex::Regex;
-use fuzzy_matcher::skim::{fuzzy_match};
+use serde::Deserialize;
+use std::cmp::max;
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::fs::File;
+use std::{io, thread, time};
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     println!("Running magic_drafter, start a draft run in arena.");
@@ -29,35 +29,37 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // for card in card_iter {
     //     println!("{:?}", card?);
     // }
-    let f = File::open("C:\\Users\\tim.jackson-kiely\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\output_log.txt")?;
+    let f = File::open("output_log.txt")?;
+    // let f = File::open("C:\\Users\\tim.jackson-kiely\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\output_log.txt")?;
     let mut reader = BufReader::new(f);
     // for line in reader.lines() {
     //     println!("{}", line?);
     // }
+    let re = Regex::new(r"<== Draft.*({.*})")?;
+
 
     // let mut line = String::new();
     // let len = reader.read_line(&mut line)?;
     // println!("First line is {} bytes long", len);
 
-    // let mut input = String::new();
-    // io::stdin().read_line(&mut input)?;
-
     loop {
         let mut line = String::new();
-        let resp = reader.read_line(&mut line);
+        let resp = reader.read_to_string(&mut line);
         match resp {
             Ok(len) => {
                 if len > 0 {
-                    println!("{}", line);
+                    if let Some(ref m) = re.captures_iter(&line).last() {
+                        println!("{}", &m[0]);
+                    }
                 } else {
-                    // println!("nothing");
+                    println!("waiting...");
+                    thread::sleep(time::Duration::from_millis(5000));
                 }
-            },
+            }
             Err(_) => {
                 println!("error");
             }
         }
-        thread::sleep(time::Duration::from_millis(5));
     }
 
     Ok(())
@@ -69,7 +71,7 @@ struct Card {
     name: String,
     arena_id: u32,
     set_name: String,
-    card_rank: String
+    card_rank: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -92,7 +94,8 @@ pub fn init_db() -> Result<(), Box<dyn Error>> {
             cardSet TEXT NOT NULL,
             cardRank TEXT
         )",
-        NO_PARAMS)?;
+        NO_PARAMS,
+    )?;
 
     let mut stmt = conn.prepare("SELECT id FROM card")?;
     let existing_cards: HashSet<_> = stmt
@@ -102,7 +105,11 @@ pub fn init_db() -> Result<(), Box<dyn Error>> {
 
     let ranks = pull_latest_card_definitions()?;
     let cards = fetch_arena_cards()?;
-    insert_card_defs(&conn, cards.difference(&existing_cards).cloned().collect(), &ranks)?;
+    insert_card_defs(
+        &conn,
+        cards.difference(&existing_cards).cloned().collect(),
+        &ranks,
+    )?;
     println!("done.");
     Ok(())
 }
@@ -111,19 +118,29 @@ pub fn pull_latest_card_definitions() -> Result<HashMap<String, String>, Box<dyn
     let res = reqwest::get("https://docs.google.com/spreadsheets/d/1BAPtQv4U9KUAtVzkccJlPS8cb0s_uOcGEDORip5uaQg/gviz/tq?headers=0&sheet=Staging%20Sheet&tq=select+A,D")?.text()?;
 
     let re = Regex::new(r#"c[^v]+v.{3}([^"]+)".{8}([^"]+)"#)?;
-    let card_ranks = re.captures_iter(&res)
-        .map(|x| (str::replace(&x[1].to_owned(), "\\u0027", "'"), x[2].to_owned()))
+    let card_ranks = re
+        .captures_iter(&res)
+        .map(|x| {
+            (
+                str::replace(&x[1].to_owned(), "\\u0027", "'"),
+                x[2].to_owned(),
+            )
+        })
         .collect::<HashMap<String, String>>(); // turbo-fish syntax >::() - very fishy
 
     Ok(card_ranks) // Is there a way to automatically return Result without needing Ok(item)?
 }
 
 fn fetch_arena_cards() -> Result<HashSet<u32>, Box<dyn Error>> {
-    let res = reqwest::get("https://raw.githubusercontent.com/mtgatracker/node-mtga/master/mtga/m20.js")?.text()?;
+    let res =
+        reqwest::get("https://raw.githubusercontent.com/mtgatracker/node-mtga/master/mtga/m20.js")?
+            .text()?;
 
     let re = Regex::new(r"mtgaID: (\d+), ")?;
-    let records: HashSet<u32> = re.captures_iter(&res).map(|x| x[1].parse::<u32>().unwrap()).collect();
-    
+    let records: HashSet<u32> = re
+        .captures_iter(&res)
+        .map(|x| x[1].parse::<u32>().unwrap())
+        .collect();
     Ok(records)
 }
 
@@ -132,12 +149,19 @@ fn fetch_card_details(id: u32) -> Result<ScryfallCard, reqwest::Error> {
 }
 
 // This should return a vector of cards but haven't figured a way to do multi-insert with rusqlite
-fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &HashMap<String, String>) -> Result<(), Box<dyn Error>> {
+fn insert_card_defs(
+    conn: &Connection,
+    card_ids: HashSet<u32>,
+    card_ranks: &HashMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
     for id in card_ids {
         let card = match fetch_card_details(id) {
             Ok(x) => x,
             _ => {
-                println!("Unable to retrieve card details with id {}, skipping...", id);
+                println!(
+                    "Unable to retrieve card details with id {}, skipping...",
+                    id
+                );
                 continue;
             }
         };
@@ -145,8 +169,15 @@ fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &Hash
         conn.execute(
             "INSERT INTO card (id, name, scryfallId, cardSet, cardRank)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            &[&card.arena_id as &dyn ToSql, &card.name, &card.id, &card.set_name, &card_rank],
-        ).unwrap();
+            &[
+                &card.arena_id as &dyn ToSql,
+                &card.name,
+                &card.id,
+                &card.set_name,
+                &card_rank,
+            ],
+        )
+        .unwrap();
         println!("{:?}{:?}", card, card_rank);
         thread::sleep(time::Duration::from_secs(1)); // be a good citizen
     }
@@ -156,8 +187,18 @@ fn insert_card_defs(conn: &Connection, card_ids: HashSet<u32>, card_ranks: &Hash
 
 fn get_closest_match<'a>(card_name: &str, card_ranks: &'a HashMap<String, String>) -> &'a str {
     let result = card_ranks.into_iter().fold((0, ""), |acc, x| {
-        let max = max(acc.0, match fuzzy_match(&card_name, x.0) { Some(y) => y, None => 0 } );
-        if max > acc.0 { (max, x.1) } else { acc }
+        let max = max(
+            acc.0,
+            match fuzzy_match(&card_name, x.0) {
+                Some(y) => y,
+                None => 0,
+            },
+        );
+        if max > acc.0 {
+            (max, x.1)
+        } else {
+            acc
+        }
     });
     result.1
 }
