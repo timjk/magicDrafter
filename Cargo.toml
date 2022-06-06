@@ -15,5 +15,5 @@ regex = "1"
 fuzzy-matcher = "*"
 
 [dependencies.rusqlite]
-version = "0.20.0"
+version = "0.23.0"
 features = ["bundled"]
